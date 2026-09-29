@@ -1,0 +1,48 @@
+============================================ 
+UngintOS Build Log 
+============================================ 
+ 
+===== NASM: Boot\boot.asm =====
+===== NASM: Boot\boot2.asm =====
+Boot\boot2.asm:677: warning: implicit DEFAULT ABS is deprecated [-w+implicit-abs-deprecated]
+===== GCC: main.c =====
+===== GCC: Kernel\SourceI\ata.c =====
+===== GCC: Kernel\SourceI\boot_data.c =====
+===== GCC: Kernel\SourceI\canvas.c =====
+===== GCC: Kernel\SourceI\console.c =====
+===== GCC: Kernel\SourceI\editor.c =====
+===== GCC: Kernel\SourceI\explorer.c =====
+===== GCC: Kernel\SourceI\fat32.c =====
+Kernel\SourceI\fat32.c: In function 'fat32_parse_lfn':
+Kernel\SourceI\fat32.c:143:13: warning: taking address of packed member of 'struct <anonymous>' may result in an unaligned pointer value [-Waddress-of-packed-member]
+  143 |             entries[i].name1,
+      |             ^~~~~~~
+Kernel\SourceI\fat32.c:144:13: warning: taking address of packed member of 'struct <anonymous>' may result in an unaligned pointer value [-Waddress-of-packed-member]
+  144 |             entries[i].name2,
+      |             ^~~~~~~
+Kernel\SourceI\fat32.c:145:13: warning: taking address of packed member of 'struct <anonymous>' may result in an unaligned pointer value [-Waddress-of-packed-member]
+  145 |             entries[i].name3
+      |             ^~~~~~~
+===== GCC: Kernel\SourceI\fbcon.c =====
+===== GCC: Kernel\SourceI\fbfont.c =====
+===== GCC: Kernel\SourceI\font.c =====
+===== GCC: Kernel\SourceI\gfx.c =====
+===== GCC: Kernel\SourceI\image.c =====
+===== GCC: Kernel\SourceI\keyboard.c =====
+===== GCC: Kernel\SourceI\mbr.c =====
+===== GCC: Kernel\SourceI\memory.c =====
+===== GCC: Kernel\SourceI\mouse.c =====
+===== GCC: Kernel\SourceI\process.c =====
+===== GCC: Kernel\SourceI\shell.c =====
+===== GCC: Kernel\SourceI\string.c =====
+===== GCC: Kernel\SourceI\terminal.c =====
+===== GCC: Kernel\SourceI\timer.c =====
+===== GCC: Kernel\SourceI\vga.c =====
+===== GCC: Kernel\SourceI\video.c =====
+===== GCC: Kernel\SourceI\window.c =====
+===== GCC: Kernel\SourceI\wm.c =====
+===== LD: kernel.elf =====
+U:\Ungint\CROSS_COMPILER\bin\x86_64-elf-ld.exe: warning: Temp\Kernel\kernel.elf has a LOAD segment with RWX permissions
+===== OBJCOPY: kernel.bin =====
+===== PAD run.bin =====
+File U:\Ungint\OS\Source\Version\UngintOS 0.1\run.bin eof set

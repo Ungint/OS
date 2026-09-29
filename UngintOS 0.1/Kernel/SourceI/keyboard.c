@@ -24,7 +24,7 @@ static inline void outb(uint16_t port,uint8_t val)
 static int shift_pressed=0;
 static int capslock_on=0;
 
-static char key_buffer[KEY_BUFFER_SIZE];
+static key_event_t key_buffer[KEY_BUFFER_SIZE];
 static volatile uint16_t key_head=0;
 static volatile uint16_t key_tail=0;
 
@@ -68,30 +68,31 @@ static void ps2_wait_read_keyboard(void)
     }
 }
 
-static void key_push(char c)
+static void key_push_event(char c, uint8_t scancode)
 {
-    if(c==0)
-        return;
-
     uint16_t next=(uint16_t)((key_head+1)%KEY_BUFFER_SIZE);
 
     if(next==key_tail)
         return;
 
-    key_buffer[key_head]=c;
+    key_buffer[key_head].ascii=c;
+    key_buffer[key_head].scancode=scancode;
     key_head=next;
 }
 
-static char key_pop(void)
+int get_key_event(key_event_t *ev)
 {
     if(key_head==key_tail)
         return 0;
 
-    char c=key_buffer[key_tail];
+    if(ev)
+    {
+        ev->ascii = key_buffer[key_tail].ascii;
+        ev->scancode = key_buffer[key_tail].scancode;
+    }
 
     key_tail=(uint16_t)((key_tail+1)%KEY_BUFFER_SIZE);
-
-    return c;
+    return 1;
 }
 
 void keyboard_init(void)
@@ -102,15 +103,9 @@ void keyboard_init(void)
     key_head=0;
     key_tail=0;
 
-    /*
-        Enable keyboard interface.
-    */
     ps2_wait_write();
     outb(PS2_STATUS,0xAE);
 
-    /*
-        Read controller configuration.
-    */
     ps2_wait_write();
     outb(PS2_STATUS,0x20);
 
@@ -118,11 +113,6 @@ void keyboard_init(void)
 
     uint8_t status=inb(PS2_DATA);
 
-    /*
-        Keyboard clock enabled.
-        Keyboard IRQ disabled because we poll.
-        Mouse IRQ disabled because we poll.
-    */
     status|=(1<<6);
     status&=~(1<<0);
     status&=~(1<<1);
@@ -133,15 +123,9 @@ void keyboard_init(void)
     ps2_wait_write();
     outb(PS2_DATA,status);
 
-    /*
-        Enable keyboard scanning.
-    */
     ps2_wait_write();
     outb(PS2_DATA,0xF4);
 
-    /*
-        Consume keyboard ACK if available.
-    */
     for(int i=0;i<100000;i++)
     {
         uint8_t st=inb(PS2_STATUS);
@@ -232,12 +216,6 @@ char scancode_to_ascii(uint8_t scancode)
     return c;
 }
 
-/*
-    Đọc toàn bộ keyboard data đang nằm trong PS/2 buffer.
-
-    QUAN TRỌNG:
-    Không đụng byte AUX/mouse.
-*/
 void keyboard_poll(void)
 {
     while(1)
@@ -254,20 +232,25 @@ void keyboard_poll(void)
 
         char c=scancode_to_ascii(scancode);
 
-        if(c)
-            key_push(c);
+        if ((scancode & 0x80) == 0) {
+            if (c || scancode == 0x48 || scancode == 0x50 || scancode == 0x4B || scancode == 0x4D) {
+                key_push_event(c, scancode);
+            }
+        }
     }
 }
 
 char getch(void)
 {
-    while(key_head==key_tail)
+    key_event_t ev;
+    while(1)
     {
         keyboard_poll();
+        if (get_key_event(&ev)) {
+            if (ev.ascii) return ev.ascii;
+        }
         __asm__ volatile("pause");
     }
-
-    return key_pop();
 }
 
 int kbhit(void)

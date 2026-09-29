@@ -60,15 +60,6 @@ main:
     call print
 
 .continue_boot:
-    ; ============================================
-    ; 🔥 SỬA: Ghi thông tin VBE THẬT SỰ vào địa chỉ vật lý cố định 0x6000.
-    ; Trước đây code chỉ copy 1 buffer rỗng (vbe_info, không bao giờ được
-    ; ghi dữ liệu) sang 0x6000, còn kernel lại dùng "extern" trỏ tới biến
-    ; boot_fb/vbe_ok riêng của NÓ (luôn = 0, vì 2 file build tách biệt,
-    ; không hề chia sẻ symbol với boot2.asm) -> kernel không bao giờ biết
-    ; VBE đã bật hay chưa, mọi hàm vẽ vì vậy return ngay không vẽ gì.
-    ; Bây giờ kernel (boot_data.c) sẽ ĐỌC đúng struct này tại 0x6000.
-    ; ============================================
     mov eax, [boot_fb]
     mov [0x6000], eax
     mov eax, [boot_pitch]
@@ -82,8 +73,6 @@ main:
     mov al, [vbe_ok]
     mov [0x600D], al
 
-
-    ; ---- Boot drive ----
     mov si, msg1
     call print
 
@@ -94,21 +83,23 @@ main:
 .drive_ok:
     mov [boot_drive], dl
 
-    ; ---- Load kernel (120 sectors) ----
-    ; 🔥 SỬA: tăng từ 96 -> 120 sector (49152 -> 61440 byte) để có thêm chỗ
-    ; cho code mới (gfx.c/font.c/image.c/video.c). VẪN phải <= 128 sector
-    ; (65536 byte = giới hạn 1 segment real-mode 0x2000:xxxx dùng bởi DAP
-    ; bên dưới) - KHÔNG được vượt quá nếu không buffer sẽ bị tràn segment.
-    ; Lưu ý: các buffer lớn (ảnh/video/font nạp từ FAT32) nằm trong .bss
-    ; (NOLOAD, xem Kernel/linker.ld) nên KHÔNG tính vào kích thước file
-    ; kernel.bin - chỉ code thật (.text/.rodata/.data) mới cần vừa 120 sector.
+    ; ---- Load kernel in multiple chunks (up to 256 sectors / 128KB) ----
+    mov word [dap_count], 64
+    mov word [dap_offset], 0x0000
+    mov word [dap_segment], 0x2000
+    mov dword [dap_lba_low], 17
+    mov dword [dap_lba_high], 0
+
+    mov cx, 4                  ; 4 chunks * 64 sectors = 256 sectors (128KB)
+.load_loop:
+    push cx
     mov di, 5
 .retry_read:
     mov si, dap
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
-    jnc .read_success
+    jnc .chunk_ok
 
     xor ax, ax
     mov dl, [boot_drive]
@@ -117,20 +108,23 @@ main:
     jnz .retry_read
     jmp .disk_error
 
+.chunk_ok:
+    add dword [dap_lba_low], 64
+    add word [dap_segment], 0x0800
+    pop cx
+    loop .load_loop
+
 .read_success:
     mov si, msg_kernel_loaded
     call print
 
-    ; ---- Enable A20 ----
     cli
     in al, 0x92
     or al, 2
     out 0x92, al
 
-    ; ---- Load GDT ----
     lgdt [gdt_desc]
 
-    ; ---- Enter Protected Mode ----
     mov eax, cr0
     or eax, 1
     mov cr0, eax
@@ -144,9 +138,6 @@ main:
     hlt
     jmp .hang
 
-; ================================================
-; VBE INIT (FIXED)
-; ================================================
 vbe_init:
     pusha
     xor ax, ax
@@ -157,7 +148,6 @@ vbe_init:
     mov si, msg_vbe_check
     call print
 
-    ; ---- Get VBE Info ----
     mov ax, 0x4F00
     mov di, 0x5000
     int 0x10
@@ -171,7 +161,6 @@ vbe_init:
     mov si, msg_vbe_found
     call print
 
-    ; ---- Get mode list ----
     mov bx, [0x5000 + 0x0E]
     mov dx, [0x5000 + 0x10]
     mov es, dx
@@ -199,14 +188,12 @@ vbe_init:
     cmp ax, 0x004F
     jne .next_mode_advance
 
-    ; ---- Check attributes ----
     mov ax, [0x5200]
     test ax, 1
     jz .next_mode_advance
     test ax, 16
     jz .next_mode_advance
 
-    ; ---- Try 1280x720 first ----
     cmp word [0x5200 + 0x12], 1280
     jne .try_1024
     cmp word [0x5200 + 0x14], 720
@@ -257,7 +244,6 @@ vbe_init:
     mov al, [0x5200 + 0x19]
     mov [boot_bpp], al
 
-    ; ---- Set VBE mode (mode chuẩn VESA lấy được từ mode list) ----
     mov ax, 0x4F02
     mov bx, [vbe_mode]
     or bx, 0x4000
@@ -266,17 +252,6 @@ vbe_init:
     cmp ax, 0x004F
     jne .failed
 
-    ; ============================================
-    ; 🔥 THÊM: Ép độ phân giải thật lên 1280x720x32 bằng Bochs Dispi
-    ; Interface (BGA - phần cứng ảo QEMU/Bochs dùng cho VBE, khác với
-    ; danh sách mode cố định trong VESA BIOS ROM). Mode list của BIOS
-    ; chỉ có các mode chuẩn 4:3 (640x480, 800x600, 1024x768...), KHÔNG
-    ; có 1280x720 - đó là lý do trước đây luôn rơi xuống 640x480.
-    ; BGA cho set X/Y TÙY Ý (X chia hết cho 8) qua 2 port I/O riêng,
-    ; không phụ thuộc mode list. PhysBasePtr (boot_fb) là địa chỉ PCI
-    ; BAR, KHÔNG đổi theo độ phân giải nên vẫn dùng lại giá trị đã lấy
-    ; được ở trên từ mode VESA chuẩn.
-    ; ============================================
     call bga_force_1280x720x32
 
     mov byte [vbe_ok], 1
@@ -296,55 +271,44 @@ vbe_init:
     popa
     ret
 
-; ================================================
-; 🔥 THÊM: Ép độ phân giải BGA lên 1280x720x32 qua I/O port 0x1CE/0x1CF,
-; bỏ qua giới hạn của danh sách mode VESA BIOS.
-; ================================================
 bga_force_1280x720x32:
     pusha
 
-    ; Tắt trước khi đổi mode (khuyến cáo theo spec BGA)
     mov dx, 0x01CE
-    mov ax, 4               ; VBE_DISPI_INDEX_ENABLE
+    mov ax, 4
     out dx, ax
     mov dx, 0x01CF
     mov ax, 0
     out dx, ax
 
-    ; XRES = 1280
     mov dx, 0x01CE
-    mov ax, 1               ; VBE_DISPI_INDEX_XRES
+    mov ax, 1
     out dx, ax
     mov dx, 0x01CF
     mov ax, 1280
     out dx, ax
 
-    ; YRES = 720
     mov dx, 0x01CE
-    mov ax, 2               ; VBE_DISPI_INDEX_YRES
+    mov ax, 2
     out dx, ax
     mov dx, 0x01CF
     mov ax, 720
     out dx, ax
 
-    ; BPP = 32
     mov dx, 0x01CE
-    mov ax, 3               ; VBE_DISPI_INDEX_BPP
+    mov ax, 3
     out dx, ax
     mov dx, 0x01CF
     mov ax, 32
     out dx, ax
 
-    ; Bật lại + bật Linear Framebuffer (ENABLE=1 | LFB_ENABLED=0x40)
     mov dx, 0x01CE
-    mov ax, 4               ; VBE_DISPI_INDEX_ENABLE
+    mov ax, 4
     out dx, ax
     mov dx, 0x01CF
     mov ax, 0x41
     out dx, ax
 
-    ; Cập nhật lại thông tin THẬT cho kernel: pitch của BGA luôn đúng
-    ; bằng XRES * (BPP/8), không có padding thêm.
     mov dword [boot_pitch], 1280*4
     mov word [boot_width], 1280
     mov word [boot_height], 720
@@ -353,9 +317,6 @@ bga_force_1280x720x32:
     popa
     ret
 
-; ================================================
-; PRINT FUNCTIONS
-; ================================================
 print_hex16:
     push ax
     push cx
@@ -438,26 +399,29 @@ print:
 .loop:
     lodsb
     cmp al, 0
-    je .done
+    je .finish
     mov ah, 0x0E
     int 0x10
     jmp .loop
-.done:
+.finish:
     pop si
     pop ax
     ret
 
-; ================================================
-; DATA
-; ================================================
 align 4
 dap:
     db 0x10
     db 0
-    dw 120
+dap_count:
+    dw 64
+dap_offset:
     dw 0x0000
+dap_segment:
     dw 0x2000
-    dq 17
+dap_lba_low:
+    dd 17
+dap_lba_high:
+    dd 0
 
 boot_drive  db 0
 vbe_ok      db 0
@@ -477,9 +441,6 @@ align 4
 vbe_mode_info:
     times 256 db 0
 
-; ================================================
-; MESSAGES
-; ================================================
 msg1                db "Stage2 Loaded!", 0x0D, 0x0A, 0
 msg_kernel_loaded   db "Kernel Loaded to 0x20000!", 0x0D, 0x0A, 0
 msg_err             db "Disk Read Error!", 0x0D, 0x0A, 0
@@ -496,9 +457,6 @@ msg_bpp             db "BPP: ", 0
 msg_x               db " x ", 0
 msg_nl              db 0x0D, 0x0A, 0
 
-; ================================================
-; GDT
-; ================================================
 gdt_start:
     dd 0x00000000, 0x00000000
     dw 0xFFFF, 0x0000
@@ -515,9 +473,6 @@ gdt_desc:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
-; ================================================
-; 32-BIT PROTECTED MODE
-; ================================================
 [BITS 32]
 protected_start:
     mov ax, 0x10
@@ -528,10 +483,6 @@ protected_start:
     mov ss, ax
     mov esp, 0x90000
 
-    ; 🔥 SỬA: chỉ ghi text-mode debug (0xB8000) khi VBE THẤT BẠI - lúc đó
-    ; màn hình vẫn ở text mode thật nên còn nhìn thấy được. Nếu VBE đã
-    ; bật thành công thì 0xB8000 không còn là bộ nhớ hiển thị nữa, ghi
-    ; vào đó vô nghĩa -> bỏ qua hoàn toàn (không dùng text mode nữa).
     cmp byte [vbe_ok], 1
     je .skip_msg2
     mov esi, msg2
@@ -562,48 +513,16 @@ enable_long_mode:
 setup_paging:
     pushad
 
-    ; ============================================
-    ; 🔥 THÊM: Lập trình lại PAT (Page Attribute Table, MSR 0x277) để có
-    ; 1 slot Write-Combining (WC) - đây là kiểu cache mà driver GPU thật
-    ; (Linux/Windows) luôn dùng cho framebuffer, KHÔNG dùng UC thuần.
-    ;
-    ; Lý do: UC thuần (Uncacheable) bắt MỌI write phải hoàn thành tuần
-    ; tự từng cái một, cực chậm khi copy nguyên màn hình (hàng triệu
-    ; write nhỏ). WC thì gộp nhiều write liên tiếp thành 1 burst trước
-    ; khi đẩy ra thật - vừa nhanh gần bằng cache thường, vừa vẫn đảm
-    ; bảo dữ liệu được đẩy ra VRAM thật đều đặn (không bị
-    ; "kẹt" trong cache CPU như kiểu Write-Back mặc định ban đầu
-    ; từng gây ra bug "màn hình gần như đứng hình" trước đó).
-    ;
-    ; PAT có 8 slot (PA0..PA7), chọn bằng 3 bit cờ trang: PAT(bit12 với
-    ; trang 2MB) | PCD(bit4) | PWT(bit3). Giá trị mặc định lúc reset CPU:
-    ;   PA0=WB(06) PA1=WT(04) PA2=UC-(07) PA3=UC(00)
-    ;   PA4=WB(06) PA5=WT(04) PA6=UC-(07) PA7=UC(00)
-    ; -> Không có slot nào là WC(01) cả nên phải ghi đè PA1 thành WC.
-    ; Việc này không ảnh hưởng gì đến trang thường (PAT=0,PCD=0,
-    ; PWT=0 -> slot PA0=WB, vẫn y như cũ).
-    ; ============================================
     mov ecx, 0x277
     mov eax, 0x00070106
     mov edx, 0x00070406
     wrmsr
 
-    ; ============================================
-    ; 🔥 SỬA: Trước đây chỉ identity-map 1GB đầu (0x00000000-0x3FFFFFFF).
-    ; Framebuffer VBE (boot_fb) thường nằm ở địa chỉ PCI BAR RẤT CAO
-    ; (thường > 1GB trên QEMU) -> ghi pixel vào đó trước đây sẽ gây
-    ; page fault / triple fault ngay lập tức (đây là nguyên nhân gây
-    ; "lỗi tùm lum"/crash khi bật VBE). Giờ map đủ 4GB (4 Page Directory,
-    ; mỗi cái phủ 1GB bằng trang 2MB) để chắc chắn phủ được boot_fb.
-    ; ============================================
-
-    ; ---- Xóa PML4 (0x1000) và PDPT (0x2000) ----
     mov edi, 0x1000
     xor eax, eax
     mov ecx, 0x2000 / 4
     rep stosd
 
-    ; ---- Xóa 4 Page Directory: 0x4000, 0x11000, 0x12000, 0x13000 ----
     mov edi, 0x4000
     xor eax, eax
     mov ecx, 0x1000 / 4
@@ -621,16 +540,13 @@ setup_paging:
     mov ecx, 0x1000 / 4
     rep stosd
 
-    ; ---- PML4[0] -> PDPT ----
     mov dword [0x1000], 0x2000 | 0x03
 
-    ; ---- PDPT[0..3] -> 4 Page Directory (mỗi cái phủ 1GB) ----
-    mov dword [0x2000 + 0*8], 0x4000  | 0x03   ; GB0: 0x00000000-0x3FFFFFFF
-    mov dword [0x2000 + 1*8], 0x11000 | 0x03   ; GB1: 0x40000000-0x7FFFFFFF
-    mov dword [0x2000 + 2*8], 0x12000 | 0x03   ; GB2: 0x80000000-0xBFFFFFFF
-    mov dword [0x2000 + 3*8], 0x13000 | 0x03   ; GB3: 0xC0000000-0xFFFFFFFF
+    mov dword [0x2000 + 0*8], 0x4000  | 0x03
+    mov dword [0x2000 + 1*8], 0x11000 | 0x03
+    mov dword [0x2000 + 2*8], 0x12000 | 0x03
+    mov dword [0x2000 + 3*8], 0x13000 | 0x03
 
-    ; ---- Đổ 512 entry trang 2MB cho từng Page Directory ----
     mov edi, 0x4000
     mov eax, 0x00000083
     mov ecx, 512
@@ -670,32 +586,13 @@ setup_paging:
     mov eax, 0x1000
     mov cr3, eax
 
-    ; ============================================
-    ; 🔥 THÊM: đánh dấu vùng FRAMEBUFFER VBE là UNCACHEABLE (PCD=1)
-    ;
-    ; NGUYÊN NHÂN GÂY "RENDER SIÊU CHẬM":
-    ; Toàn bộ 4GB ở trên được map với cờ 0x83 (Present+Write+PS), tức là
-    ; KHÔNG bật PCD -> CPU coi cả framebuffer là RAM thường, cacheable.
-    ; Khi kernel ghi pixel (gfx_present/memcpy), dữ liệu chỉ nằm trong
-    ; cache của CPU; CPU không có lý do gì để tự flush cache xuống vùng
-    ; nhớ VRAM thật ngay lập tức - nó chỉ "trôi" xuống khi cache line đó
-    ; bị đẩy ra (do thiếu chỗ cache ở nơi khác). Kết quả: hình ảnh hiển
-    ; thị (QEMU đọc thẳng từ VRAM thật, không qua cache CPU) chỉ được
-    ; cập nhật một cách RẤT RẢI RÁC -> chính là hiện tượng "render chậm
-    ; như rùa" / vài khung hình mỗi... phút mà bro gặp phải.
-    ;
-    ; Sửa: quét PML4->PDPT->PD để tìm đúng (các) page 2MB chứa boot_fb,
-    ; rồi đánh dấu (các) page đó là Write-Combining (WC, qua PAT ở trên)
-    ; thay vì Write-Back mặc định. Phần còn lại của bộ nhớ (code/data/
-    ; stack) vẫn cacheable Write-Back như cũ -> vẫn nhanh.
-    ; ============================================
     mov eax, [boot_fb]
-    and eax, 0xFFE00000         ; làm tròn xuống bội số 2MB
-    mov ebx, eax                ; ebx = địa chỉ base 2MB-aligned của framebuffer
+    and eax, 0xFFE00000
+    mov ebx, eax
 
     mov edx, eax
     shr edx, 30
-    and edx, 3                  ; edx = GB thứ mấy (0..3) chứa framebuffer
+    and edx, 3
 
     mov edi, 0x4000
     cmp edx, 0
@@ -711,23 +608,19 @@ setup_paging:
 
     mov ecx, eax
     shr ecx, 21
-    and ecx, 0x1FF               ; ecx = chỉ số entry (0..511) trong PD
+    and ecx, 0x1FF
     imul ecx, ecx, 8
-    add edi, ecx                 ; edi = địa chỉ entry 2MB đầu tiên cần sửa
+    add edi, ecx
 
-    ; Đánh dấu 16 entry liên tiếp (16 * 2MB = 32MB) là Write-Combining -
-    ; đủ cho hầu hết độ phân giải VBE 32bpp thông dụng (vd 1920x1080x4
-    ; ~= 8MB).
     mov ecx, 16
 .fb_mark_wc_loop:
     mov edx, ebx
-    or edx, 0x8B                 ; Present(1)+Write(2)+PWT(0x08)+PS(0x80) -> chon slot PAT WC
+    or edx, 0x8B
     mov [edi], edx
     add edi, 8
     add ebx, 0x200000
     loop .fb_mark_wc_loop
 
-    ; Nạp lại CR3 để chắc chắn TLB không còn giữ entry cacheable cũ.
     mov eax, 0x1000
     mov cr3, eax
 
@@ -743,7 +636,7 @@ print32:
 .loop:
     lodsb
     cmp al, 0
-    je .done
+    je .finish
     cmp al, 0x0A
     je .newline
     cmp al, 0x0D
@@ -763,7 +656,7 @@ print32:
     add eax, 0xB8000
     mov edi, eax
     jmp .loop
-.done:
+.finish:
     pop esi
     pop edi
     pop edx
@@ -771,9 +664,6 @@ print32:
     pop eax
     ret
 
-; ================================================
-; 64-BIT LONG MODE
-; ================================================
 [BITS 64]
 long_mode_start:
     mov ax, 0x20
@@ -784,8 +674,6 @@ long_mode_start:
     mov ss, ax
     mov rsp, 0x90000
 
-    ; 🔥 SỬA: cùng lý do như protected_start - chỉ in debug qua 0xB8000
-    ; khi VBE thất bại, vì khi đó mới còn ở text mode thật.
     cmp byte [vbe_ok], 1
     je .skip_text_debug
 
@@ -803,10 +691,6 @@ long_mode_start:
 
 .skip_text_debug:
 
-    ; 🔥 SỬA: XÓA đoạn copy "vbe_info" (buffer rỗng, không bao giờ được
-    ; ghi dữ liệu thật) đè lên 0x6000 - nó sẽ xóa mất struct VBE thật
-    ; vừa được ghi vào 0x6000 ở phần .continue_boot phía trên!
-
     jmp 0x20000
 
 .hang:
@@ -822,7 +706,7 @@ print64:
 .loop:
     lodsb
     cmp al, 0
-    je .done
+    je .finish
     cmp al, 0x0A
     je .newline
     cmp al, 0x0D
@@ -842,7 +726,7 @@ print64:
     add rax, 0xB8000
     mov rdi, rax
     jmp .loop
-.done:
+.finish:
     pop rsi
     pop rdi
     pop rdx
@@ -850,15 +734,9 @@ print64:
     pop rax
     ret
 
-; ================================================
-; MESSAGES 32/64
-; ================================================
 msg2 db "Protected Mode Completed!", 0x0D, 0x0A, 0
 msg3 db "Long Mode Completed!", 0x0D, 0x0A, 0
 msg4 db "Load Kernel Completed!", 0
 msg_vbe_info db "VBE info passed to kernel", 0
 
-; ================================================
-; PAD TO 8192 BYTES
-; ================================================
 times 8192 - ($ - $$) db 0

@@ -13,6 +13,8 @@
 #include "../Include/canvas.h"
 #include "../Include/wm.h"
 #include "../Include/explorer.h"
+#include "../Include/editor.h"
+#include "../Include/terminal.h"
 
 #define GFXWIN_X 0
 #define GFXWIN_Y 0
@@ -231,6 +233,8 @@ void _start(void)
 
     loading_draw(40,"Starting process manager...");
     process_manager_init();
+    editor_init_all();
+    terminal_init_all();
 
     loading_draw(50,"Initializing filesystem...");
 
@@ -316,27 +320,86 @@ void _start(void)
         my = mouse_y();
         click = mouse_left_button();
 
+        int click_rising_edge = (click && !prev_click);
+
         wm_handle_mouse(
             mx,
             my,
             click
         );
 
-        if(gfxwin_id != CANVAS_INVALID_ID && click)
+        if(click_rising_edge)
         {
-            process_t *p = process_get(gfxwin_id);
+            int top_p_id = -1;
+            int top_layer = 1000;
 
-            if(p)
+            for(int i = 0; i < PROCESS_MAX; i++)
             {
-                int rel_x = mx - (p->x + WINDOW_BORDER);
-                int rel_y = my - (p->y + WINDOW_TITLEBAR_HEIGHT);
+                process_t *p = process_get(i);
+                if (!p || !p->visible) continue;
+                if (mx >= p->x && mx < p->x + p->width &&
+                    my >= p->y && my < p->y + p->height)
+                {
+                    if (p->layer < top_layer)
+                    {
+                        top_layer = p->layer;
+                        top_p_id = p->id;
+                    }
+                }
+            }
 
-                explorer_handle_click(
-                    gfxwin_id,
-                    rel_x,
-                    rel_y,
-                    click
-                );
+            if(top_p_id != -1)
+            {
+                process_t *p = process_get(top_p_id);
+                if(p)
+                {
+                    int close_x = p->x + p->width - 25;
+                    int close_y = p->y + 4;
+                    if(mx >= close_x && mx <= close_x + 20 &&
+                        my >= close_y && my <= close_y + 20)
+                    {
+                        editor_close_by_id(p->id);
+                        terminal_close_by_id(p->id);
+                        close_process(p->id);
+                        if(p->id == gfxwin_id)
+                        {
+                            gfxwin_id = CANVAS_INVALID_ID;
+                        }
+                    }
+                    else
+                    {
+                        int rel_x = mx - (p->x + WINDOW_BORDER);
+                        int rel_y = my - (p->y + WINDOW_TITLEBAR_HEIGHT);
+
+                        if(rel_x >= 0 && rel_y >= 0)
+                        {
+                            if(p->id == gfxwin_id)
+                            {
+                                explorer_handle_click(p->id, rel_x, rel_y, click);
+                            }
+                            else
+                            {
+                                editor_handle_click(p->id, rel_x, rel_y, click);
+                                terminal_handle_click(p->id, rel_x, rel_y, click);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        key_event_t key_ev;
+        while (get_key_event(&key_ev))
+        {
+            for(int i = 0; i < PROCESS_MAX; i++)
+            {
+                process_t *p = process_get(i);
+                if (p && p->focused && p->id != gfxwin_id)
+                {
+                    editor_handle_key(p->id, key_ev.ascii, key_ev.scancode);
+                    terminal_handle_key(p->id, key_ev.ascii, key_ev.scancode);
+                    break;
+                }
             }
         }
 

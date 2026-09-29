@@ -1,5 +1,6 @@
-// Kernel/SourceI/explorer.c
 #include "../Include/explorer.h"
+#include "../Include/editor.h"
+#include "../Include/terminal.h"
 #include "../Include/canvas.h"
 #include "../Include/fat32.h"
 #include "../Include/string.h"
@@ -101,34 +102,32 @@ void explorer_draw(int canvas_id) {
 
     if (w <= 0 || h <= 0) return;
 
-    // Background
     canvas_clear(canvas_id, 0x001E1E24);
 
-    // 1. Top Navigation Bar (Height: 40)
     canvas_fill_rect(canvas_id, 0, 0, w, 40, 0x002A2A32);
     canvas_draw_line(canvas_id, 0, 39, w, 39, 0x003A3A45);
 
-    // Back Button [<]
     canvas_fill_rect(canvas_id, 10, 8, 30, 24, 0x003A3A48);
     canvas_draw_rect(canvas_id, 10, 8, 30, 24, 0x00555565);
     font_draw_string_canvas(canvas_id, 20, 12, "<", 0x00FFFFFF, GFX_TRANSPARENT);
 
-    // Up Button [^]
     canvas_fill_rect(canvas_id, 45, 8, 30, 24, 0x003A3A48);
     canvas_draw_rect(canvas_id, 45, 8, 30, 24, 0x00555565);
     font_draw_string_canvas(canvas_id, 55, 12, "^", 0x00FFFFFF, GFX_TRANSPARENT);
 
-    // Home Button [H]
     canvas_fill_rect(canvas_id, 80, 8, 30, 24, 0x003A3A48);
     canvas_draw_rect(canvas_id, 80, 8, 30, 24, 0x00555565);
     font_draw_string_canvas(canvas_id, 90, 12, "H", 0x00FFFFFF, GFX_TRANSPARENT);
 
-    // Address Bar Input Box
-    canvas_fill_rect(canvas_id, 120, 8, w - 245, 24, 0x00141418);
-    canvas_draw_rect(canvas_id, 120, 8, w - 245, 24, 0x00444455);
-    font_draw_string_canvas(canvas_id, 128, 12, g_explorer.current_path, 0x005DADE2, GFX_TRANSPARENT);
+    // Terminal button
+    canvas_fill_rect(canvas_id, 115, 8, 100, 24, 0x003B4252);
+    canvas_draw_rect(canvas_id, 115, 8, 100, 24, 0x0088C0D0);
+    font_draw_string_canvas(canvas_id, 122, 12, ">_ Terminal", 0x0088C0D0, GFX_TRANSPARENT);
 
-    // Top Right Corner FPS Counter Box
+    canvas_fill_rect(canvas_id, 225, 8, w - 350, 24, 0x00141418);
+    canvas_draw_rect(canvas_id, 225, 8, w - 350, 24, 0x00444455);
+    font_draw_string_canvas(canvas_id, 233, 12, g_explorer.current_path, 0x005DADE2, GFX_TRANSPARENT);
+
     char fps_str[32];
     strcpy(fps_str, "FPS: ");
     char fps_num[16];
@@ -139,7 +138,6 @@ void explorer_draw(int canvas_id) {
     canvas_draw_rect(canvas_id, w - 115, 8, 105, 24, 0x002ECC71);
     font_draw_string_canvas(canvas_id, w - 105, 12, fps_str, 0x002ECC71, GFX_TRANSPARENT);
 
-    // 2. Main File List Header (Y: 40 to 65)
     canvas_fill_rect(canvas_id, 0, 40, w, 25, 0x0025252E);
     canvas_draw_line(canvas_id, 0, 64, w, 64, 0x003A3A45);
 
@@ -147,7 +145,6 @@ void explorer_draw(int canvas_id) {
     font_draw_string_canvas(canvas_id, w - 300, 45, "Type", 0x00AAAAAA, GFX_TRANSPARENT);
     font_draw_string_canvas(canvas_id, w - 150, 45, "Size", 0x00AAAAAA, GFX_TRANSPARENT);
 
-    // 3. File List Items
     int item_y = 68;
     int item_h = 28;
 
@@ -161,22 +158,18 @@ void explorer_draw(int canvas_id) {
             canvas_draw_rect(canvas_id, 5, item_y, w - 10, item_h - 2, 0x005DADE2);
         }
 
-        // Icon
         if (g_explorer.items[i].is_dir) {
             draw_folder_icon(canvas_id, 15, item_y + 4);
         } else {
             draw_file_icon(canvas_id, 15, item_y + 4);
         }
 
-        // Name
         uint32_t text_color = g_explorer.items[i].is_dir ? 0x00F1C40F : 0x00ECF0F1;
         font_draw_string_canvas(canvas_id, 45, item_y + 6, g_explorer.items[i].name, text_color, GFX_TRANSPARENT);
 
-        // Type
         const char *type_str = g_explorer.items[i].is_dir ? "File Folder" : "File";
         font_draw_string_canvas(canvas_id, w - 300, item_y + 6, type_str, 0x00888888, GFX_TRANSPARENT);
 
-        // Size
         if (!g_explorer.items[i].is_dir) {
             char size_buf[32];
             format_size(g_explorer.items[i].size, size_buf);
@@ -186,7 +179,6 @@ void explorer_draw(int canvas_id) {
         item_y += item_h;
     }
 
-    // 4. Status Bar at Bottom (Height: 24)
     canvas_fill_rect(canvas_id, 0, h - 24, w, 24, 0x0018181C);
     canvas_draw_line(canvas_id, 0, h - 24, w, h - 24, 0x003A3A45);
 
@@ -205,14 +197,11 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
 
     uint64_t now = timer_ms();
 
-    // 1. Toolbar clicks
     if (rel_y >= 8 && rel_y <= 32) {
-        // Back Button
         if (rel_x >= 10 && rel_x <= 40) {
             explorer_navigate(canvas_id, "/");
             return;
         }
-        // Up Button
         if (rel_x >= 45 && rel_x <= 75) {
             if (strcmp(g_explorer.current_path, "/") != 0) {
                 char parent[EXPLORER_MAX_PATH];
@@ -228,14 +217,16 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
             }
             return;
         }
-        // Home Button
         if (rel_x >= 80 && rel_x <= 110) {
             explorer_navigate(canvas_id, "/");
             return;
         }
+        if (rel_x >= 115 && rel_x <= 215) {
+            terminal_open();
+            return;
+        }
     }
 
-    // 2. File list clicks
     if (rel_y >= 68) {
         int index = (rel_y - 68) / 28;
         if (index >= 0 && index < g_explorer.item_count) {
@@ -246,17 +237,20 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
             g_explorer.selected_item = index;
 
             if (is_double_click) {
+                char full_path[EXPLORER_MAX_PATH];
+                if (strcmp(g_explorer.current_path, "/") == 0) {
+                    strcpy(full_path, "/");
+                    strcat(full_path, g_explorer.items[index].name);
+                } else {
+                    strcpy(full_path, g_explorer.current_path);
+                    strcat(full_path, "/");
+                    strcat(full_path, g_explorer.items[index].name);
+                }
+
                 if (g_explorer.items[index].is_dir) {
-                    char new_path[EXPLORER_MAX_PATH];
-                    if (strcmp(g_explorer.current_path, "/") == 0) {
-                        strcpy(new_path, "/");
-                        strcat(new_path, g_explorer.items[index].name);
-                    } else {
-                        strcpy(new_path, g_explorer.current_path);
-                        strcat(new_path, "/");
-                        strcat(new_path, g_explorer.items[index].name);
-                    }
-                    explorer_navigate(canvas_id, new_path);
+                    explorer_navigate(canvas_id, full_path);
+                } else {
+                    editor_open(full_path);
                 }
             }
         }
