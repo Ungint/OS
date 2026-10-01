@@ -20,7 +20,6 @@
 #define GFXWIN_Y 0
 #define GFXWIN_W 1280
 #define GFXWIN_H 720
-#define MOUSE_UPDATE_MS 25
 
 static int gfxwin_id = CANVAS_INVALID_ID;
 static IMAGE desktop;
@@ -137,16 +136,6 @@ static void desktop_draw(void)
 {
     if(desktop.loaded)
         useimage(&desktop,0,0);
-}
-
-static void draw_mouse(void)
-{
-    if(mouse.loaded)
-        useimage(
-            &mouse,
-            (uint32_t)mouse_x(),
-            (uint32_t)mouse_y()
-        );
 }
 
 static const char *image_error_name(image_error_t error)
@@ -289,13 +278,7 @@ void _start(void)
 
     for(volatile uint64_t i = 0;i < 30000000;i++);
 
-    int prev_mx = -100000;
-    int prev_my = -100000;
     int prev_click = 0;
-    int force_full = 1;
-
-    uint64_t last_full_ms = timer_ms();
-    uint64_t last_mouse_update = timer_ms();
 
     uint64_t fps_time = timer_ms();
     uint32_t frames = 0;
@@ -309,9 +292,6 @@ void _start(void)
         int mx;
         int my;
         int click;
-        int need_full;
-        int presented = 0;
-        uint64_t now;
 
         keyboard_poll();
         mouse_poll();
@@ -321,10 +301,6 @@ void _start(void)
         click = mouse_left_button();
 
         int click_rising_edge = (click && !prev_click);
-
-        if (click || prev_click) {
-            force_full = 1;
-        }
 
         wm_handle_mouse(
             mx,
@@ -395,7 +371,6 @@ void _start(void)
         key_event_t key_ev;
         while (get_key_event(&key_ev))
         {
-            force_full = 1;
             for(int i = 0; i < PROCESS_MAX; i++)
             {
                 process_t *p = process_get(i);
@@ -408,98 +383,32 @@ void _start(void)
             }
         }
 
-        now = timer_ms();
+        wm_composite(
+            desktop_draw,
+            0
+        );
 
-        need_full =
-            force_full ||
-            click != prev_click ||
-            now - last_full_ms >= 33;
+        gfx_layer_snapshot();
 
-        if(need_full)
+        if(mouse.loaded)
         {
-            wm_composite(
-                desktop_draw,
-                0
+            gfx_composite_image(
+                (uint32_t)mx,
+                (uint32_t)my,
+                mouse_w,
+                mouse_h,
+                mouse.pixels,
+                mouse_w,
+                mouse_h
             );
-
-            gfx_layer_snapshot();
-
-            if(mouse.loaded)
-            {
-                gfx_composite_image(
-                    (uint32_t)mx,
-                    (uint32_t)my,
-                    mouse_w,
-                    mouse_h,
-                    mouse.pixels,
-                    mouse_w,
-                    mouse_h
-                );
-            }
-
-            gfx_present();
-            presented = 1;
-
-            force_full = 0;
-            last_full_ms = now;
-
-            prev_mx = mx;
-            prev_my = my;
-            last_mouse_update = now;
         }
-        else
-        {
-            if((mx != prev_mx || my != prev_my) &&
-               now - last_mouse_update >= MOUSE_UPDATE_MS)
-            {
-                gfx_layer_restore_rect(
-                    (uint32_t)prev_mx,
-                    (uint32_t)prev_my,
-                    mouse_w,
-                    mouse_h
-                );
 
-                if(mouse.loaded)
-                {
-                    gfx_composite_image(
-                        (uint32_t)mx,
-                        (uint32_t)my,
-                        mouse_w,
-                        mouse_h,
-                        mouse.pixels,
-                        mouse_w,
-                        mouse_h
-                    );
-                }
-
-                gfx_present_rect(
-                    (uint32_t)prev_mx,
-                    (uint32_t)prev_my,
-                    mouse_w,
-                    mouse_h
-                );
-
-                gfx_present_rect(
-                    (uint32_t)mx,
-                    (uint32_t)my,
-                    mouse_w,
-                    mouse_h
-                );
-
-                presented = 1;
-
-                prev_mx = mx;
-                prev_my = my;
-                last_mouse_update = now;
-            }
-        }
+        gfx_present();
 
         prev_click = click;
 
-        if(presented)
-            frames++;
-
-        now = timer_ms();
+        frames++;
+        uint64_t now = timer_ms();
 
         if(now - fps_time >= 1000)
         {
