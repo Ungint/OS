@@ -40,5 +40,6 @@ void terminal_close_by_id(int canvas_id);
 void terminal_draw(int canvas_id);
 void terminal_handle_key(int canvas_id, char c, uint8_t scancode);
 void terminal_handle_click(int canvas_id, int rel_x, int rel_y, int click);
+void terminal_run_unr(terminal_state_t *term, const char *unr_path);
 
 #endif

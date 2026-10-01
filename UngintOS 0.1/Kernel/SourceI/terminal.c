@@ -9,6 +9,7 @@
 #include "../Include/explorer.h"
 #include "../Include/vga.h"
 #include "../Include/memory.h"
+#include "../Include/compiler.h"
 
 #define MAX_TERMINALS 2
 
@@ -100,6 +101,29 @@ static void terminal_draw_cb(process_t *p) {
     }
 }
 
+static terminal_state_t *g_active_exec_term = 0;
+
+static void global_term_printer(const char *str, uint32_t color) {
+    if (g_active_exec_term) {
+        terminal_print_color(g_active_exec_term, str, color);
+    }
+}
+
+void terminal_run_unr(terminal_state_t *term, const char *unr_path) {
+    terminal_state_t *prev = g_active_exec_term;
+    if (!term) {
+        for (int i = 0; i < MAX_TERMINALS; i++) {
+            if (g_terminals[i] && g_terminals[i]->active) {
+                term = g_terminals[i];
+                break;
+            }
+        }
+    }
+    g_active_exec_term = term;
+    run_unr_file(unr_path, global_term_printer);
+    g_active_exec_term = prev;
+}
+
 // ============================================
 // COMMAND EXECUTOR FOR TERMINAL
 // ============================================
@@ -181,6 +205,8 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
         terminal_print(term, "  ver             - Display UngintOS version info");
         terminal_print(term, "  neofetch        - Display system information");
         terminal_print(term, "  date / time     - Display system uptime");
+        terminal_print(term, "  touch/mkfile <f>- Create an empty file");
+        terminal_print(term, "  buildc <src.c>  - Compile C source file to .unr executable");
         terminal_print(term, "  calc <a op b>   - Evaluate integer math (e.g. calc 12 + 34)");
         terminal_print(term, "  off             - Shutdown OS");
         terminal_print(term, "  res             - Reboot OS");
@@ -313,6 +339,64 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
         } else {
             terminal_print_color(term, "wf: Error creating file", 0x00BF616A);
         }
+    } else if (strcmp(cmd, "touch") == 0 || strcmp(cmd, "mkfile") == 0) {
+        if (args[0] == 0) {
+            terminal_print_color(term, "Usage: touch <filename>", 0x00BF616A);
+            return;
+        }
+        if (fat32_create(args) == 0) {
+            fat32_close();
+            char msg[128];
+            strcpy(msg, "Created file: ");
+            strcat(msg, args);
+            terminal_print_color(term, msg, 0x00A3BE8C);
+        } else {
+            terminal_print_color(term, "touch: Error creating file", 0x00BF616A);
+        }
+    } else if (strcmp(cmd, "buildc") == 0) {
+        if (args[0] == 0) {
+            terminal_print_color(term, "Usage: buildc <file.c> [-o output.unr]", 0x00BF616A);
+            return;
+        }
+        char src_path[128];
+        char out_path[128];
+        int idx = 0, sidx = 0;
+        while (args[idx] == ' ') idx++;
+        while (args[idx] != ' ' && args[idx] != 0 && sidx < 127) {
+            src_path[sidx++] = args[idx++];
+        }
+        src_path[sidx] = 0;
+
+        while (args[idx] == ' ') idx++;
+        if (args[idx] == '-' && args[idx+1] == 'o') {
+            idx += 2;
+            while (args[idx] == ' ') idx++;
+            int oidx = 0;
+            while (args[idx] != ' ' && args[idx] != 0 && oidx < 127) {
+                out_path[oidx++] = args[idx++];
+            }
+            out_path[oidx] = 0;
+        } else {
+            strcpy(out_path, src_path);
+            int len = strlen(out_path);
+            if (len > 2 && out_path[len - 2] == '.' && out_path[len - 1] == 'c') {
+                out_path[len - 2] = 0;
+            }
+            strcat(out_path, ".unr");
+        }
+
+        if (buildc_compile(src_path, out_path, "") == 0) {
+            char msg[256];
+            strcpy(msg, "Successfully compiled ");
+            strcat(msg, src_path);
+            strcat(msg, " -> ");
+            strcat(msg, out_path);
+            terminal_print_color(term, msg, 0x00A3BE8C);
+        } else {
+            terminal_print_color(term, "buildc: Compilation failed!", 0x00BF616A);
+        }
+    } else if (strlen(cmd) > 4 && strcmp(&cmd[strlen(cmd) - 4], ".unr") == 0) {
+        terminal_run_unr(term, cmd);
     } else if (strcmp(cmd, "calc") == 0) {
         int a = 0, b = 0;
         char op = 0;
