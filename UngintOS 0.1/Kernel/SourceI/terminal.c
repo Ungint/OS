@@ -10,6 +10,7 @@
 #include "../Include/vga.h"
 #include "../Include/memory.h"
 #include "../Include/compiler.h"
+#include "../Include/wm.h"
 
 #define MAX_TERMINALS 2
 
@@ -171,7 +172,6 @@ static void normalize_path(const char *current, const char *input, char *output)
 }
 
 static void exec_command(terminal_state_t *term, char *cmdline) {
-    // Trim leading spaces
     while (*cmdline == ' ') cmdline++;
     if (*cmdline == 0) return;
 
@@ -463,6 +463,21 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
 // ============================================
 
 int terminal_open(void) {
+    // If a terminal is already open, bring it to front and focus
+    for (int i = 0; i < MAX_TERMINALS; i++) {
+        if (g_terminal_pool[i].active) {
+            process_t *p = process_get(g_terminal_pool[i].canvas_id);
+            if (p && p->used && p->visible) {
+                wm_bring_to_front(p->id);
+                for (int k = 0; k < PROCESS_MAX; k++) {
+                    process_t *other = process_get(k);
+                    if (other) other->focused = (other->id == p->id);
+                }
+                return g_terminal_pool[i].canvas_id;
+            }
+        }
+    }
+
     int slot = -1;
     for (int i = 0; i < MAX_TERMINALS; i++) {
         if (!g_terminal_pool[i].active) {
@@ -502,6 +517,12 @@ int terminal_open(void) {
         return -1;
     }
 
+    // Focus the new terminal process
+    for (int k = 0; k < PROCESS_MAX; k++) {
+        process_t *other = process_get(k);
+        if (other) other->focused = (other->id == win->id);
+    }
+
     terminal_state_t *term = &g_terminal_pool[slot];
     memset(term, 0, sizeof(terminal_state_t));
     term->active = 1;
@@ -537,7 +558,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
     terminal_state_t *term = get_terminal_by_canvas(canvas_id);
     if (!term) return;
 
-    // Up Arrow (scancode 0x48) - previous command in history
     if (scancode == 0x48) {
         if (term->history_count > 0 && term->history_index > 0) {
             term->history_index--;
@@ -548,7 +568,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         return;
     }
 
-    // Down Arrow (scancode 0x50) - next command in history
     if (scancode == 0x50) {
         if (term->history_index < term->history_count - 1) {
             term->history_index++;
@@ -564,19 +583,16 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         return;
     }
 
-    // Left Arrow (scancode 0x4B)
     if (scancode == 0x4B) {
         if (term->cursor_pos > 0) term->cursor_pos--;
         return;
     }
 
-    // Right Arrow (scancode 0x4D)
     if (scancode == 0x4D) {
         if (term->cursor_pos < term->input_len) term->cursor_pos++;
         return;
     }
 
-    // Backspace
     if (c == '\b') {
         if (term->cursor_pos > 0) {
             for (int i = term->cursor_pos - 1; i < term->input_len - 1; i++) {
@@ -589,7 +605,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         return;
     }
 
-    // Enter key
     if (c == '\n' || c == '\r') {
         char echo_line[TERMINAL_MAX_CMD + TERMINAL_MAX_PATH + 10];
         strcpy(echo_line, "[ ");
@@ -600,7 +615,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         terminal_print_color(term, echo_line, 0x00A3BE8C);
 
         if (term->input_len > 0) {
-            // Add to history
             if (term->history_count < TERMINAL_HISTORY_MAX) {
                 strcpy(term->history[term->history_count++], term->input_buf);
             } else {
@@ -611,18 +625,15 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
             }
             term->history_index = term->history_count;
 
-            // Execute command
             exec_command(term, term->input_buf);
         }
 
-        // Clear input buffer
         term->input_buf[0] = 0;
         term->input_len = 0;
         term->cursor_pos = 0;
         return;
     }
 
-    // Printable ASCII character
     if (c >= 32 && c <= 126) {
         if (term->input_len < TERMINAL_MAX_CMD - 1) {
             for (int i = term->input_len; i > term->cursor_pos; i--) {
@@ -646,7 +657,6 @@ void terminal_draw(int canvas_id) {
 
     if (w <= 0 || h <= 0) return;
 
-    // Dark terminal background
     canvas_clear(canvas_id, 0x000F0F14);
 
     int line_h = 16;
@@ -664,7 +674,6 @@ void terminal_draw(int canvas_id) {
         y += line_h;
     }
 
-    // Draw current prompt line
     char prompt[TERMINAL_MAX_PATH + 10];
     strcpy(prompt, "[ ");
     strcat(prompt, term->current_path);
@@ -678,7 +687,6 @@ void terminal_draw(int canvas_id) {
 
     font_draw_string_canvas(canvas_id, px, y, term->input_buf, 0x00ECEFF4, GFX_TRANSPARENT);
 
-    // Draw blinking / block cursor at current cursor_pos
     int cursor_x = px + term->cursor_pos * 8;
     canvas_fill_rect(canvas_id, cursor_x, y, 8, 14, 0x0081A1C1);
     if (term->cursor_pos < term->input_len) {
