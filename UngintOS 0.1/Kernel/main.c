@@ -273,6 +273,7 @@ void _start(void)
 
     gfx_layer_init();
     gfxwin_init();
+    terminal_open();
 
     loading_draw(100,"System ready!");
 
