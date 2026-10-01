@@ -391,6 +391,7 @@ void _start(void)
         key_event_t key_ev;
         while (get_key_event(&key_ev))
         {
+            force_full = 1;
             for(int i = 0; i < PROCESS_MAX; i++)
             {
                 process_t *p = process_get(i);
