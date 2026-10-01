@@ -322,6 +322,10 @@ void _start(void)
 
         int click_rising_edge = (click && !prev_click);
 
+        if (click || prev_click) {
+            force_full = 1;
+        }
+
         wm_handle_mouse(
             mx,
             my,
@@ -409,7 +413,7 @@ void _start(void)
         need_full =
             force_full ||
             click != prev_click ||
-            now - last_full_ms >= 250;
+            now - last_full_ms >= 33;
 
         if(need_full)
         {

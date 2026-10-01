@@ -13,12 +13,12 @@
 
 #define MAX_TERMINALS 2
 
-static terminal_state_t *g_terminals[MAX_TERMINALS];
+static terminal_state_t g_terminal_pool[MAX_TERMINALS];
 
 static terminal_state_t* get_terminal_by_canvas(int canvas_id) {
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (g_terminals[i] && g_terminals[i]->active && g_terminals[i]->canvas_id == canvas_id) {
-            return g_terminals[i];
+        if (g_terminal_pool[i].active && g_terminal_pool[i].canvas_id == canvas_id) {
+            return &g_terminal_pool[i];
         }
     }
     return 0;
@@ -45,7 +45,7 @@ static void int_to_str(uint32_t num, char *buf) {
 
 void terminal_init_all(void) {
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        g_terminals[i] = 0;
+        memset(&g_terminal_pool[i], 0, sizeof(terminal_state_t));
     }
 }
 
@@ -113,8 +113,8 @@ void terminal_run_unr(terminal_state_t *term, const char *unr_path) {
     terminal_state_t *prev = g_active_exec_term;
     if (!term) {
         for (int i = 0; i < MAX_TERMINALS; i++) {
-            if (g_terminals[i] && g_terminals[i]->active) {
-                term = g_terminals[i];
+            if (g_terminal_pool[i].active) {
+                term = &g_terminal_pool[i];
                 break;
             }
         }
@@ -465,18 +465,13 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
 int terminal_open(void) {
     int slot = -1;
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (!g_terminals[i] || !g_terminals[i]->active) {
+        if (!g_terminal_pool[i].active) {
             slot = i;
             break;
         }
     }
 
     if (slot == -1) return -1;
-
-    if (!g_terminals[slot]) {
-        g_terminals[slot] = (terminal_state_t *)malloc(sizeof(terminal_state_t));
-        if (!g_terminals[slot]) return -1;
-    }
 
     char window_title[64];
     strcpy(window_title, "UngintOS Terminal Console");
@@ -507,7 +502,7 @@ int terminal_open(void) {
         return -1;
     }
 
-    terminal_state_t *term = g_terminals[slot];
+    terminal_state_t *term = &g_terminal_pool[slot];
     memset(term, 0, sizeof(terminal_state_t));
     term->active = 1;
     term->canvas_id = canvas_id;
@@ -523,9 +518,9 @@ int terminal_open(void) {
 
 void terminal_close_by_id(int canvas_id) {
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (g_terminals[i] && g_terminals[i]->active && g_terminals[i]->canvas_id == canvas_id) {
-            g_terminals[i]->active = 0;
-            g_terminals[i]->canvas_id = -1;
+        if (g_terminal_pool[i].active && g_terminal_pool[i].canvas_id == canvas_id) {
+            g_terminal_pool[i].active = 0;
+            g_terminal_pool[i].canvas_id = -1;
             break;
         }
     }

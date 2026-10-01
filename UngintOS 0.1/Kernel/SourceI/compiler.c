@@ -11,7 +11,7 @@
 typedef enum {
     TOK_INT, TOK_IDENT, TOK_NUMBER, TOK_STRING,
     TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH, TOK_ASSIGN,
-    TOK_EQ, TOK_NEQ, TOK_LT, TOK_GT,
+    TOK_EQ, TOK_NEQ, TOK_LT, TOK_GT, TOK_COMMA,
     TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_SEMICOLON,
     TOK_IF, TOK_WHILE, TOK_FOR, TOK_PRINTF, TOK_RETURN,
     TOK_EOF
@@ -112,6 +112,7 @@ static void lex(const char *src) {
         tokens[token_count].text[0] = c;
         tokens[token_count].text[1] = '\0';
         tokens[token_count].val = 0;
+        tokens[token_count].type = TOK_EOF;
 
         if (c == '+') tokens[token_count].type = TOK_PLUS;
         else if (c == '-') tokens[token_count].type = TOK_MINUS;
@@ -126,6 +127,7 @@ static void lex(const char *src) {
         }
         else if (c == '<') tokens[token_count].type = TOK_LT;
         else if (c == '>') tokens[token_count].type = TOK_GT;
+        else if (c == ',') tokens[token_count].type = TOK_COMMA;
         else if (c == '(') tokens[token_count].type = TOK_LPAREN;
         else if (c == ')') tokens[token_count].type = TOK_RPAREN;
         else if (c == '{') tokens[token_count].type = TOK_LBRACE;
@@ -155,14 +157,9 @@ int buildc_compile(const char *src_path, const char *out_path, const char *flags
 
     if (fat32_create(out_path) != 0) return -1;
 
-    // Header: Magic "UNR1"
     fat32_write(UNR_MAGIC, 4);
-
-    // Save token count & payload
     fat32_write(&token_count, sizeof(int));
     fat32_write(tokens, token_count * sizeof(token_t));
-
-    // Save raw source
     fat32_write(&bytes, sizeof(int));
     fat32_write(src_buf, bytes);
 
@@ -237,6 +234,7 @@ static int eval_primary() {
         if (tokens[tok_idx].type == TOK_RPAREN) tok_idx++;
         return v;
     }
+    if (tok_idx < token_count) tok_idx++;
     return 0;
 }
 
@@ -276,6 +274,11 @@ int run_unr_file(const char *unr_path, void (*print_fn)(const char *str, uint32_
     }
 
     fat32_read(&token_count, sizeof(int));
+    if (token_count <= 0 || token_count > MAX_TOKENS) {
+        fat32_close();
+        if (print_fn) print_fn("Invalid .unr format token size!", 0x00BF616A);
+        return -1;
+    }
     fat32_read(tokens, token_count * sizeof(token_t));
     fat32_close();
 
@@ -304,6 +307,63 @@ int run_unr_file(const char *unr_path, void (*print_fn)(const char *str, uint32_
             continue;
         }
 
+        if (t->type == TOK_IF) {
+            tok_idx++;
+            if (tokens[tok_idx].type == TOK_LPAREN) tok_idx++;
+            int cond = eval_expr();
+            if (tokens[tok_idx].type == TOK_RPAREN) tok_idx++;
+
+            if (!cond) {
+                int depth = 0;
+                if (tokens[tok_idx].type == TOK_LBRACE) {
+                    tok_idx++; depth = 1;
+                    while (tok_idx < token_count && depth > 0) {
+                        if (tokens[tok_idx].type == TOK_LBRACE) depth++;
+                        else if (tokens[tok_idx].type == TOK_RBRACE) depth--;
+                        tok_idx++;
+                    }
+                } else {
+                    while (tok_idx < token_count && tokens[tok_idx].type != TOK_SEMICOLON) tok_idx++;
+                    if (tokens[tok_idx].type == TOK_SEMICOLON) tok_idx++;
+                }
+            } else {
+                if (tokens[tok_idx].type == TOK_LBRACE) tok_idx++;
+            }
+            continue;
+        }
+
+        if (t->type == TOK_WHILE) {
+            tok_idx++;
+            if (tokens[tok_idx].type == TOK_LPAREN) tok_idx++;
+            int cond = eval_expr();
+            if (tokens[tok_idx].type == TOK_RPAREN) tok_idx++;
+
+            if (!cond) {
+                int depth = 0;
+                if (tokens[tok_idx].type == TOK_LBRACE) {
+                    tok_idx++; depth = 1;
+                    while (tok_idx < token_count && depth > 0) {
+                        if (tokens[tok_idx].type == TOK_LBRACE) depth++;
+                        else if (tokens[tok_idx].type == TOK_RBRACE) depth--;
+                        tok_idx++;
+                    }
+                } else {
+                    while (tok_idx < token_count && tokens[tok_idx].type != TOK_SEMICOLON) tok_idx++;
+                    if (tokens[tok_idx].type == TOK_SEMICOLON) tok_idx++;
+                }
+            } else {
+                if (tokens[tok_idx].type == TOK_LBRACE) tok_idx++;
+            }
+            continue;
+        }
+
+        if (t->type == TOK_RETURN) {
+            tok_idx++;
+            eval_expr();
+            if (tokens[tok_idx].type == TOK_SEMICOLON) tok_idx++;
+            break;
+        }
+
         if (t->type == TOK_IDENT) {
             char varname[32];
             strcpy(varname, t->text);
@@ -328,8 +388,8 @@ int run_unr_file(const char *unr_path, void (*print_fn)(const char *str, uint32_
 
                     int arg_val = 0;
                     int has_arg = 0;
-                    if (tokens[tok_idx].type == TOK_SEMICOLON || tokens[tok_idx].text[0] == ',') {
-                        if (tokens[tok_idx].text[0] == ',') {
+                    if (tokens[tok_idx].type == TOK_COMMA || tokens[tok_idx].type == TOK_SEMICOLON) {
+                        if (tokens[tok_idx].type == TOK_COMMA) {
                             tok_idx++;
                             arg_val = eval_expr();
                             has_arg = 1;
