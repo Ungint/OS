@@ -475,7 +475,8 @@ int terminal_open(void) {
         for (int i = 0; i < MAX_TERMINALS; i++) {
             if (g_terminal_pool[i].active) {
                 process_t *p = process_get(g_terminal_pool[i].canvas_id);
-                if (p && p->used && p->visible) {
+                if (p && p->used) {
+                    p->visible = 1;
                     wm_bring_to_front(p->id);
                     for (int k = 0; k < PROCESS_MAX; k++) {
                         process_t *other = process_get(k);
@@ -516,6 +517,8 @@ int terminal_open(void) {
         close_process(process_id);
         return -1;
     }
+
+    win->visible = 1;
 
     // Focus the new terminal process
     for (int k = 0; k < PROCESS_MAX; k++) {

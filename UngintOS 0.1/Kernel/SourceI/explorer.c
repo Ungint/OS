@@ -198,7 +198,7 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
 
     uint64_t now = timer_ms();
 
-    if (rel_y >= 8 && rel_y <= 32) {
+    if (rel_y >= 4 && rel_y <= 36) {
         if (rel_x >= 10 && rel_x <= 40) {
             explorer_navigate(canvas_id, "/");
             return;
@@ -222,7 +222,7 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
             explorer_navigate(canvas_id, "/");
             return;
         }
-        if (rel_x >= 115 && rel_x <= 215) {
+        if (rel_x >= 115 && rel_x <= 220) {
             terminal_open();
             return;
         }
