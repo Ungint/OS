@@ -50,14 +50,20 @@ int canvas_bind(process_t *win)
     if(content_w < 1) content_w = 1;
     if(content_h < 1) content_h = 1;
 
-    bytes = (uint32_t)content_w * (uint32_t)content_h * 4u;
+    c = &g_canvases[win->id];
 
+    if(c->pixels && c->width == content_w && c->height == content_h) {
+        c->bound = 1;
+        for(i = 0; i < content_w * content_h; i++)
+            c->pixels[i] = 0x00000000;
+        return win->id;
+    }
+
+    bytes = (uint32_t)content_w * (uint32_t)content_h * 4u;
     pixels = (uint32_t *)malloc(bytes);
 
     if(!pixels)
         return CANVAS_INVALID_ID;
-
-    c = &g_canvases[win->id];
 
     c->width  = content_w;
     c->height = content_h;
