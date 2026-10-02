@@ -463,21 +463,6 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
 // ============================================
 
 int terminal_open(void) {
-    // If a terminal is already open, bring it to front and focus
-    for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (g_terminal_pool[i].active) {
-            process_t *p = process_get(g_terminal_pool[i].canvas_id);
-            if (p && p->used && p->visible) {
-                wm_bring_to_front(p->id);
-                for (int k = 0; k < PROCESS_MAX; k++) {
-                    process_t *other = process_get(k);
-                    if (other) other->focused = (other->id == p->id);
-                }
-                return g_terminal_pool[i].canvas_id;
-            }
-        }
-    }
-
     int slot = -1;
     for (int i = 0; i < MAX_TERMINALS; i++) {
         if (!g_terminal_pool[i].active) {
@@ -486,7 +471,22 @@ int terminal_open(void) {
         }
     }
 
-    if (slot == -1) return -1;
+    if (slot == -1) {
+        for (int i = 0; i < MAX_TERMINALS; i++) {
+            if (g_terminal_pool[i].active) {
+                process_t *p = process_get(g_terminal_pool[i].canvas_id);
+                if (p && p->used && p->visible) {
+                    wm_bring_to_front(p->id);
+                    for (int k = 0; k < PROCESS_MAX; k++) {
+                        process_t *other = process_get(k);
+                        if (other) other->focused = (other->id == p->id);
+                    }
+                    return g_terminal_pool[i].canvas_id;
+                }
+            }
+        }
+        return -1;
+    }
 
     char window_title[64];
     strcpy(window_title, "UngintOS Terminal Console");
