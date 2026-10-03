@@ -13,6 +13,8 @@ static explorer_state_t g_explorer;
 static uint64_t g_last_click_time = 0;
 static int g_last_clicked_item = -1;
 
+static void int_to_str(uint32_t num, char *buf);
+
 static void int_to_str(uint32_t num, char *buf) {
     if (num == 0) {
         buf[0] = '0';
