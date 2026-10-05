@@ -7,10 +7,13 @@
 #include "../Include/font.h"
 #include "../Include/timer.h"
 #include "../Include/gfx.h"
+#include "../Include/compiler.h"
 
 static explorer_state_t g_explorer;
 static uint64_t g_last_click_time = 0;
 static int g_last_clicked_item = -1;
+
+static void int_to_str(uint32_t num, char *buf);
 
 static void int_to_str(uint32_t num, char *buf) {
     if (num == 0) {
@@ -197,7 +200,7 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
 
     uint64_t now = timer_ms();
 
-    if (rel_y >= 8 && rel_y <= 32) {
+    if (rel_y >= 4 && rel_y <= 36) {
         if (rel_x >= 10 && rel_x <= 40) {
             explorer_navigate(canvas_id, "/");
             return;
@@ -221,7 +224,7 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
             explorer_navigate(canvas_id, "/");
             return;
         }
-        if (rel_x >= 115 && rel_x <= 215) {
+        if (rel_x >= 115 && rel_x <= 220) {
             terminal_open();
             return;
         }
@@ -250,7 +253,14 @@ void explorer_handle_click(int canvas_id, int rel_x, int rel_y, int click) {
                 if (g_explorer.items[index].is_dir) {
                     explorer_navigate(canvas_id, full_path);
                 } else {
-                    editor_open(full_path);
+                    int path_len = strlen(full_path);
+                    if (path_len > 4 && strcmp(&full_path[path_len - 4], ".unr") == 0) {
+                        int term_canvas = terminal_open();
+                        (void)term_canvas;
+                        terminal_run_unr(0, full_path);
+                    } else {
+                        editor_open(full_path);
+                    }
                 }
             }
         }
