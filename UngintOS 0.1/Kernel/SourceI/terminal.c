@@ -9,15 +9,17 @@
 #include "../Include/explorer.h"
 #include "../Include/vga.h"
 #include "../Include/memory.h"
+#include "../Include/compiler.h"
+#include "../Include/wm.h"
 
 #define MAX_TERMINALS 2
 
-static terminal_state_t *g_terminals[MAX_TERMINALS];
+static terminal_state_t g_terminal_pool[MAX_TERMINALS];
 
 static terminal_state_t* get_terminal_by_canvas(int canvas_id) {
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (g_terminals[i] && g_terminals[i]->active && g_terminals[i]->canvas_id == canvas_id) {
-            return g_terminals[i];
+        if (g_terminal_pool[i].active && g_terminal_pool[i].canvas_id == canvas_id) {
+            return &g_terminal_pool[i];
         }
     }
     return 0;
@@ -44,7 +46,7 @@ static void int_to_str(uint32_t num, char *buf) {
 
 void terminal_init_all(void) {
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        g_terminals[i] = 0;
+        memset(&g_terminal_pool[i], 0, sizeof(terminal_state_t));
     }
 }
 
@@ -100,6 +102,29 @@ static void terminal_draw_cb(process_t *p) {
     }
 }
 
+static terminal_state_t *g_active_exec_term = 0;
+
+static void global_term_printer(const char *str, uint32_t color) {
+    if (g_active_exec_term) {
+        terminal_print_color(g_active_exec_term, str, color);
+    }
+}
+
+void terminal_run_unr(terminal_state_t *term, const char *unr_path) {
+    terminal_state_t *prev = g_active_exec_term;
+    if (!term) {
+        for (int i = 0; i < MAX_TERMINALS; i++) {
+            if (g_terminal_pool[i].active) {
+                term = &g_terminal_pool[i];
+                break;
+            }
+        }
+    }
+    g_active_exec_term = term;
+    run_unr_file(unr_path, global_term_printer);
+    g_active_exec_term = prev;
+}
+
 // ============================================
 // COMMAND EXECUTOR FOR TERMINAL
 // ============================================
@@ -147,7 +172,6 @@ static void normalize_path(const char *current, const char *input, char *output)
 }
 
 static void exec_command(terminal_state_t *term, char *cmdline) {
-    // Trim leading spaces
     while (*cmdline == ' ') cmdline++;
     if (*cmdline == 0) return;
 
@@ -181,6 +205,8 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
         terminal_print(term, "  ver             - Display UngintOS version info");
         terminal_print(term, "  neofetch        - Display system information");
         terminal_print(term, "  date / time     - Display system uptime");
+        terminal_print(term, "  touch/mkfile <f>- Create an empty file");
+        terminal_print(term, "  buildc <src.c>  - Compile C source file to .unr executable");
         terminal_print(term, "  calc <a op b>   - Evaluate integer math (e.g. calc 12 + 34)");
         terminal_print(term, "  off             - Shutdown OS");
         terminal_print(term, "  res             - Reboot OS");
@@ -313,6 +339,64 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
         } else {
             terminal_print_color(term, "wf: Error creating file", 0x00BF616A);
         }
+    } else if (strcmp(cmd, "touch") == 0 || strcmp(cmd, "mkfile") == 0) {
+        if (args[0] == 0) {
+            terminal_print_color(term, "Usage: touch <filename>", 0x00BF616A);
+            return;
+        }
+        if (fat32_create(args) == 0) {
+            fat32_close();
+            char msg[128];
+            strcpy(msg, "Created file: ");
+            strcat(msg, args);
+            terminal_print_color(term, msg, 0x00A3BE8C);
+        } else {
+            terminal_print_color(term, "touch: Error creating file", 0x00BF616A);
+        }
+    } else if (strcmp(cmd, "buildc") == 0) {
+        if (args[0] == 0) {
+            terminal_print_color(term, "Usage: buildc <file.c> [-o output.unr]", 0x00BF616A);
+            return;
+        }
+        char src_path[128];
+        char out_path[128];
+        int idx = 0, sidx = 0;
+        while (args[idx] == ' ') idx++;
+        while (args[idx] != ' ' && args[idx] != 0 && sidx < 127) {
+            src_path[sidx++] = args[idx++];
+        }
+        src_path[sidx] = 0;
+
+        while (args[idx] == ' ') idx++;
+        if (args[idx] == '-' && args[idx+1] == 'o') {
+            idx += 2;
+            while (args[idx] == ' ') idx++;
+            int oidx = 0;
+            while (args[idx] != ' ' && args[idx] != 0 && oidx < 127) {
+                out_path[oidx++] = args[idx++];
+            }
+            out_path[oidx] = 0;
+        } else {
+            strcpy(out_path, src_path);
+            int len = strlen(out_path);
+            if (len > 2 && out_path[len - 2] == '.' && out_path[len - 1] == 'c') {
+                out_path[len - 2] = 0;
+            }
+            strcat(out_path, ".unr");
+        }
+
+        if (buildc_compile(src_path, out_path, "") == 0) {
+            char msg[256];
+            strcpy(msg, "Successfully compiled ");
+            strcat(msg, src_path);
+            strcat(msg, " -> ");
+            strcat(msg, out_path);
+            terminal_print_color(term, msg, 0x00A3BE8C);
+        } else {
+            terminal_print_color(term, "buildc: Compilation failed!", 0x00BF616A);
+        }
+    } else if (strlen(cmd) > 4 && strcmp(&cmd[strlen(cmd) - 4], ".unr") == 0) {
+        terminal_run_unr(term, cmd);
     } else if (strcmp(cmd, "calc") == 0) {
         int a = 0, b = 0;
         char op = 0;
@@ -381,17 +465,28 @@ static void exec_command(terminal_state_t *term, char *cmdline) {
 int terminal_open(void) {
     int slot = -1;
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (!g_terminals[i] || !g_terminals[i]->active) {
+        if (!g_terminal_pool[i].active) {
             slot = i;
             break;
         }
     }
 
-    if (slot == -1) return -1;
-
-    if (!g_terminals[slot]) {
-        g_terminals[slot] = (terminal_state_t *)malloc(sizeof(terminal_state_t));
-        if (!g_terminals[slot]) return -1;
+    if (slot == -1) {
+        for (int i = 0; i < MAX_TERMINALS; i++) {
+            if (g_terminal_pool[i].active) {
+                process_t *p = process_get(g_terminal_pool[i].canvas_id);
+                if (p && p->used) {
+                    p->visible = 1;
+                    wm_bring_to_front(p->id);
+                    for (int k = 0; k < PROCESS_MAX; k++) {
+                        process_t *other = process_get(k);
+                        if (other) other->focused = (other->id == p->id);
+                    }
+                    return g_terminal_pool[i].canvas_id;
+                }
+            }
+        }
+        return -1;
     }
 
     char window_title[64];
@@ -423,7 +518,15 @@ int terminal_open(void) {
         return -1;
     }
 
-    terminal_state_t *term = g_terminals[slot];
+    win->visible = 1;
+
+    // Focus the new terminal process
+    for (int k = 0; k < PROCESS_MAX; k++) {
+        process_t *other = process_get(k);
+        if (other) other->focused = (other->id == win->id);
+    }
+
+    terminal_state_t *term = &g_terminal_pool[slot];
     memset(term, 0, sizeof(terminal_state_t));
     term->active = 1;
     term->canvas_id = canvas_id;
@@ -439,9 +542,9 @@ int terminal_open(void) {
 
 void terminal_close_by_id(int canvas_id) {
     for (int i = 0; i < MAX_TERMINALS; i++) {
-        if (g_terminals[i] && g_terminals[i]->active && g_terminals[i]->canvas_id == canvas_id) {
-            g_terminals[i]->active = 0;
-            g_terminals[i]->canvas_id = -1;
+        if (g_terminal_pool[i].active && g_terminal_pool[i].canvas_id == canvas_id) {
+            g_terminal_pool[i].active = 0;
+            g_terminal_pool[i].canvas_id = -1;
             break;
         }
     }
@@ -458,7 +561,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
     terminal_state_t *term = get_terminal_by_canvas(canvas_id);
     if (!term) return;
 
-    // Up Arrow (scancode 0x48) - previous command in history
     if (scancode == 0x48) {
         if (term->history_count > 0 && term->history_index > 0) {
             term->history_index--;
@@ -469,7 +571,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         return;
     }
 
-    // Down Arrow (scancode 0x50) - next command in history
     if (scancode == 0x50) {
         if (term->history_index < term->history_count - 1) {
             term->history_index++;
@@ -485,19 +586,16 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         return;
     }
 
-    // Left Arrow (scancode 0x4B)
     if (scancode == 0x4B) {
         if (term->cursor_pos > 0) term->cursor_pos--;
         return;
     }
 
-    // Right Arrow (scancode 0x4D)
     if (scancode == 0x4D) {
         if (term->cursor_pos < term->input_len) term->cursor_pos++;
         return;
     }
 
-    // Backspace
     if (c == '\b') {
         if (term->cursor_pos > 0) {
             for (int i = term->cursor_pos - 1; i < term->input_len - 1; i++) {
@@ -510,7 +608,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         return;
     }
 
-    // Enter key
     if (c == '\n' || c == '\r') {
         char echo_line[TERMINAL_MAX_CMD + TERMINAL_MAX_PATH + 10];
         strcpy(echo_line, "[ ");
@@ -521,7 +618,6 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
         terminal_print_color(term, echo_line, 0x00A3BE8C);
 
         if (term->input_len > 0) {
-            // Add to history
             if (term->history_count < TERMINAL_HISTORY_MAX) {
                 strcpy(term->history[term->history_count++], term->input_buf);
             } else {
@@ -532,18 +628,15 @@ void terminal_handle_key(int canvas_id, char c, uint8_t scancode) {
             }
             term->history_index = term->history_count;
 
-            // Execute command
             exec_command(term, term->input_buf);
         }
 
-        // Clear input buffer
         term->input_buf[0] = 0;
         term->input_len = 0;
         term->cursor_pos = 0;
         return;
     }
 
-    // Printable ASCII character
     if (c >= 32 && c <= 126) {
         if (term->input_len < TERMINAL_MAX_CMD - 1) {
             for (int i = term->input_len; i > term->cursor_pos; i--) {
@@ -567,7 +660,6 @@ void terminal_draw(int canvas_id) {
 
     if (w <= 0 || h <= 0) return;
 
-    // Dark terminal background
     canvas_clear(canvas_id, 0x000F0F14);
 
     int line_h = 16;
@@ -585,7 +677,6 @@ void terminal_draw(int canvas_id) {
         y += line_h;
     }
 
-    // Draw current prompt line
     char prompt[TERMINAL_MAX_PATH + 10];
     strcpy(prompt, "[ ");
     strcat(prompt, term->current_path);
@@ -599,7 +690,6 @@ void terminal_draw(int canvas_id) {
 
     font_draw_string_canvas(canvas_id, px, y, term->input_buf, 0x00ECEFF4, GFX_TRANSPARENT);
 
-    // Draw blinking / block cursor at current cursor_pos
     int cursor_x = px + term->cursor_pos * 8;
     canvas_fill_rect(canvas_id, cursor_x, y, 8, 14, 0x0081A1C1);
     if (term->cursor_pos < term->input_len) {
